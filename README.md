@@ -95,3 +95,107 @@ java -jar -Dserver.port=8888 -Dcsp.sentinel.dashboard.server=localhost:8888 -Dpr
 * 它是怎么实现的（责任链有关系）
 * SPI的扩展
 
+
+
+### 基于注解方式实现
+
+切面需要引入这个依赖
+
+```xml
+<dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-annotation-aspectj</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+```
+
+```java
+@RestController
+public class SentinelController {
+
+    /**
+     * 针对方法级别的限流
+     * @return
+     */
+    @SentinelResource(value = "syayHello")
+    public String sayHello(){
+        System.out.println("hello world");
+        return "hello world";
+    }
+
+}
+```
+
+但是由于需要切面拦截，所以我们还需要写一个切面的bean，提供给spring
+
+```java
+@Configuration
+public class ApoConfiguration {
+
+    @Bean
+    public SentinelResourceAspect sentinelResourceAspect(){
+        return new SentinelResourceAspect();
+    }
+
+}
+```
+
+制定规则。
+
+```java
+public class DemoApplication {
+
+    public static void main(String[] args) {
+        initFlowRules();
+        SpringApplication.run(DemoApplication.class, args);
+    }
+
+    //初始化规则
+    private static void initFlowRules(){
+        List<FlowRule> rules = new ArrayList<>();
+        FlowRule flowRule = new FlowRule();
+        flowRule.setResource("doTest");//资源，被保护的，一般是方法或者接口；
+        flowRule.setGrade(RuleConstant.FLOW_GRADE_QPS);//限流的阈值类型，这里有两种，一种是qps，一种是线程数
+        flowRule.setCount(10);//表示数量
+        rules.add(flowRule);
+        FlowRuleManager.loadRules(rules);
+    }
+}
+
+```
+
+### Sentinel源码的解读
+
+Sentinel的限流算法基于滑动窗口，但是其实本质实现的手法并不负责，他将时间切割成一个又一个可以看做是窗口的区域，并通过开始时间和结束时间来计算当前的窗口索引，并是否落到了当前的窗口上，如果落到了，就返回当前窗口，如果发现计算出来的时间大于了当前窗口表示，当前窗口已经过期，需要将窗口后移。
+
+同时，Sentinel将所有被定义成Resource的资源，纳入自己的管辖范围之内，然后将所有的资源拼凑成树节点，这很好理解，文件中的资源系统就是一个一个的树节点。
+
+当请求过来的时候，会通过他们组成链路的一个一个考验，这个链路的前半段是一些容错的检测，中间的轮盘表示
+
+![1565709769709](C:\Users\99405\AppData\Roaming\Typora\typora-user-images\1565709769709.png)
+
+他的算法的具体验，也就是滑动窗口的具体体验，每一个滑动窗口都会记录自己开始时间和结束时间，并且会记录这个滑动窗口进入请求的次数。
+
+然后就是FlowSlot，我们之前定义的规则，我们要规定这个请求是否符合我们制定的规则，如果不符合，我们会用我们的方式将这个请求如何处理。后面则是一连串的请求方式
+
+```java
+public class DefaultSlotChainBuilder implements SlotChainBuilder {
+
+    @Override
+    public ProcessorSlotChain build() {
+        ProcessorSlotChain chain = new DefaultProcessorSlotChain();
+        chain.addLast(new NodeSelectorSlot());
+        chain.addLast(new ClusterBuilderSlot());
+        chain.addLast(new LogSlot());
+        chain.addLast(new StatisticSlot());
+        chain.addLast(new SystemSlot());
+        chain.addLast(new AuthoritySlot());
+        chain.addLast(new FlowSlot());
+        chain.addLast(new DegradeSlot());
+
+        return chain;
+    }
+
+}
+```
+
