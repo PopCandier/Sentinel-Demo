@@ -199,3 +199,202 @@ public class DefaultSlotChainBuilder implements SlotChainBuilder {
 }
 ```
 
+### Sentinel 整合 Dubbo
+
+首先将dubbo的项目调整好，然后再整合Sentinel之前，需要引入一个jar包
+
+```xml
+<dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-dubbo-adapter</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+```
+
+设置限流规则
+
+```java
+@SpringBootApplication
+public class SentinelProviderApplication {
+
+    public static void main(String[] args) throws IOException {
+        initFlowRule();//设置限流规则
+        SpringApplication.run(SentinelProviderApplication.class, args);
+        System.in.read();
+    }
+
+    private static void initFlowRule(){
+
+        FlowRule flowRule = new FlowRule();
+        // 有参数的情况下，也需要有参数 sayHello(java.lang.String)
+       ////请注意，这里拦截的是接口 
+        flowRule.setResource("com.pop.sentinel.SentinelService:sayHello()");
+        flowRule.setCount(10);
+        flowRule.setGrade(RuleConstant.FLOW_GRADE_QPS);
+        flowRule.setControlBehavior(RuleConstant.CONTROL_BEHAVIOR_DEFAULT);
+        FlowRuleManager.loadRules(Collections.singletonList(flowRule));
+    }
+
+}
+```
+
+然后用jmeter进行压测
+
+![1565795637772](./img\1565795637772.png)
+
+发现请求是成功限流了。
+
+### 更加丰富的限流方式
+
+如果你不希望某个来源的请求，例如不希望某个模块例如我们创建的，sentinel-consumer的请求，可以这样设置。
+
+```java
+private static void initFlowRule(){
+
+        FlowRule flowRule = new FlowRule();
+        // 有参数的情况下，也需要有参数 sayHello(java.lang.String)
+        //请注意，这里拦截的是接口
+        flowRule.setResource("com.pop.sentinel.SentinelService:sayHello()");
+        flowRule.setCount(5);
+        flowRule.setGrade(RuleConstant.FLOW_GRADE_QPS);
+        flowRule.setControlBehavior(RuleConstant.CONTROL_BEHAVIOR_DEFAULT);
+
+        //限定来源的请求
+        flowRule.setLimitApp("sentinel-consumer");
+
+        FlowRuleManager.loadRules(Collections.singletonList(flowRule));
+    }
+```
+
+但是你看到这里，可能以为这也许会读取dubbo配置中的应用名信息，但其实不是。
+
+![1565796381539](./img\1565796381539.png)
+
+之前讲解dubbo源码的时候，谈到了有一个隐式参数的问题，`setAttachment`，请注意，key不能写错。当然我们可以用不带隐式参数的内容看一看。做一个对比。
+
+```java
+@GetMapping("sayHello")
+    public String sayHello(){
+        RpcContext.getContext().setAttachment("dubboApplication","sentinel-consumer");
+        return sentinelService.sayHello();
+    }
+
+    @GetMapping("sayHello2")
+    public String sayHello2(){
+//        RpcContext.getContext().setAttachment("dubboApplication","sentinel-consumer");
+        return sentinelService.sayHello();
+    }
+```
+
+![1565796550955](./img\1565796550955.png)
+
+另一个则很正常
+
+将一个参数，限流的行为
+
+```java
+flowRule.setControlBehavior(RuleConstant.CONTROL_BEHAVIOR_DEFAULT);
+```
+
+如果被限流了，那么采取的流量控制的行为（理解为线程池的 满了的拒绝策略）
+
+* 直接拒绝（默认情况）
+* warm up 预热。不会一下到达峰值，而是缓慢到达
+* 均匀排队
+
+
+
+### 分布式限流
+
+以上的例子，如果我们配置两个服务，那么这个原本限流的数量为10，会变成20，这也是一种扩容的方式，我们配置的更多，能够承担的容量也就越多。这是集群。
+
+但是，分布式却相反，明明分布在不同地方，却还是看起来是一个整体，对于这样的限流，我们首先想到了是zk中的分布式锁，zk的分布式锁是依靠zk中的有序节点去实现的，说到底是依靠第三方服务，对于sentinel的分布式限流也同样是一个道理，我们需要开发一个类似token的一个服务，来专门管理限流的方法，同时我们为了可以动态管理限流规则，我们也可以将规则配置到nacos中。但是为了高可用，我们将其他服务业配置的同样可以连接nacos，这样避免了token服务挂掉后的可用性问题。
+
+那么现在我们来开发这样一个token服务，来管控各个服务之间的限流情况。
+
+```xml
+<!--遗憾的是，sentinel并没有提供现成的组件给我们，而是提供了api-->		
+<dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-cluster-server-default</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+
+<!--由于我们用到了nacos，这是nacos与sentinel的整合包,数据源规则-->
+
+        <dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-dadasource-nacos</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+
+<dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-log4j12</artifactId>
+            <version>1.7.26</version>
+        </dependency>
+```
+
+关于日志额外说一句，在resources文件夹下，创建一个log4j.properties文件，加入如下内容。
+
+```properties
+log4j.rootLogger=info, stdout
+log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+log4j.appender.stdout.layout.ConversionPattern=%d %p [%c] - %m%n
+```
+
+加入服务的启动类，这些是提供sentinel提供给我们的api
+
+```java
+public class ClusterServer {
+
+    public static void main(String[] args) throws Exception {
+
+        ClusterTokenServer tokenServer = new SentinelDefaultTokenServer();
+
+        ClusterServerConfigManager.loadGlobalTransportConfig(
+                new ServerTransportConfig().setIdleSeconds(600).setPort(9999)
+        );
+
+        ClusterServerConfigManager.
+                loadServerNamespaceSet(Collections.singleton("App-Pop"));
+
+        tokenServer.start();
+        //启动了一个token服务
+    }
+
+}
+```
+
+然后配置nacos的数据源
+
+```java
+public class DataSourceInitFunc implements InitFunc {
+
+   private final String remoteAddress="192.168.216.1";//nacos host
+   private final String groupId = "SENTINEL_GROUP";
+   private final String FLOW_POSTFIX="-flow-rules";//dataid
+
+    //意味着会从当前token-server会从nacos上获得限流规则
+    @Override
+    public void init() throws Exception {
+        //这里的namesapce其实是我们之前设置的 App-Pop ，同时，这个还支持设置多个命名空间
+        ClusterFlowRuleManager.setPropertySupplier(namespace->{
+            //从nacos的数据源获取
+            ReadableDataSource<String, List<FlowRule>>
+                    rds = new NacosDataSource<List<FlowRule>>(
+                            remoteAddress,groupId,namespace+FLOW_POSTFIX,
+                    source -> JSON.parseObject(source, new TypeReference<>()));
+            return rds.getProperty();//得到配置属性
+        });
+    }
+}
+```
+
+接着通过sentinel的api，让我们加载到这个配置类。
+
+![1565804060013](./img\1565804060013.png)
+
+接着启动。
+

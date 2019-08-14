@@ -6,6 +6,7 @@
     <modules>
         <module>sentinel-api</module>
         <module>sentinel-provider</module>
+        <module>token-server</module>
     </modules>
     <parent>
         <groupId>org.springframework.boot</groupId>
