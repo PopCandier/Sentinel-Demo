@@ -240,7 +240,7 @@ public class SentinelProviderApplication {
 
 然后用jmeter进行压测
 
-![1565795637772](./img\1565795637772.png)
+![1565795637772](./img/1565795637772.png)
 
 发现请求是成功限流了。
 
@@ -268,7 +268,7 @@ private static void initFlowRule(){
 
 但是你看到这里，可能以为这也许会读取dubbo配置中的应用名信息，但其实不是。
 
-![1565796381539](./img\1565796381539.png)
+![1565796381539](./img/1565796381539.png)
 
 之前讲解dubbo源码的时候，谈到了有一个隐式参数的问题，`setAttachment`，请注意，key不能写错。当然我们可以用不带隐式参数的内容看一看。做一个对比。
 
@@ -286,7 +286,7 @@ private static void initFlowRule(){
     }
 ```
 
-![1565796550955](./img\1565796550955.png)
+![1565796550955](./img/1565796550955.png)
 
 另一个则很正常
 
@@ -394,7 +394,7 @@ public class DataSourceInitFunc implements InitFunc {
 
 接着通过sentinel的api，让我们加载到这个配置类。
 
-![1565804060013](./img\1565804060013.png)
+![1565804060013](./img/1565804060013.png)
 
 接着启动。
 
