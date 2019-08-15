@@ -398,7 +398,7 @@ public class DataSourceInitFunc implements InitFunc {
 
 ，然后我们需要去nacos上配置限流规则，请注意，这里的DataId，需要和我们之前定义的命名规则+Flow的拼接是一样的。gourp也是我们之前命名
 
-![1565881611238](C:\Users\99405\AppData\Roaming\Typora\typora-user-images\1565881611238.png)
+![1565881611238](./img/1565881611238.png)
 
 * resource 这个就是我们设置的资源的路径了，和api一样
 * grade表示限流的模式，1 是 qps
@@ -584,4 +584,3 @@ public class SentinelProviderApplication {
 当然为了实现集群限流，我们需要开启两个服务，来测试两个服务是否是同一个限流。
 
 然后限流是成功的。
-
