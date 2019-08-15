@@ -385,7 +385,7 @@ public class DataSourceInitFunc implements InitFunc {
             ReadableDataSource<String, List<FlowRule>>
                     rds = new NacosDataSource<List<FlowRule>>(
                             remoteAddress,groupId,namespace+FLOW_POSTFIX,
-                    source -> JSON.parseObject(source, new TypeReference<>()));
+                    source -> JSON.parseObject(source, new TypeReference<List<FlowRule>>(){}));
             return rds.getProperty();//得到配置属性
         });
     }
@@ -396,5 +396,192 @@ public class DataSourceInitFunc implements InitFunc {
 
 ![1565804060013](./img/1565804060013.png)
 
-接着启动。
+，然后我们需要去nacos上配置限流规则，请注意，这里的DataId，需要和我们之前定义的命名规则+Flow的拼接是一样的。gourp也是我们之前命名
+
+![1565881611238](C:\Users\99405\AppData\Roaming\Typora\typora-user-images\1565881611238.png)
+
+* resource 这个就是我们设置的资源的路径了，和api一样
+* grade表示限流的模式，1 是 qps
+* count 表示限流的个数，我们设置阈值为10个，超过10个就会限流
+* clusterMode 集群模式，true表示开启，由于我们改成了mysql的存储，mysql只有集群模式下才可以，所以这个应该开启。
+* clusterConfig 集群的配置
+  * flowId，这个要保证唯一
+  * thredsholdType，阈值模式 1 表示全局模式
+  * fallbackToLocalWhenFail 表示，读取失败了 ，是否要从本地去拿配置。
+
+接着我们启动，可以看到输出。
+
+![1565882488861](./img/1565882488861.png)
+
+我们去这个路径下面找到日志。
+
+![1565882520034](./img/1565882520034.png)
+
+```properties
+//....
+2019-08-15 23:17:59.274 INFO [ClusterServerConfigManager] Server namespace set will be update to: [App-Pop]
+2019-08-15 23:17:59.277 INFO [ClusterParamFlowRuleManager] Cluster parameter rules loaded for namespace <default>: {}
+2019-08-15 23:17:59.888 INFO [NacosDataSource] New property value received for (properties: {namespace=, serverAddr=192.168.216.1}) (dataId: App-Pop-flow-rules, groupId: SENTINEL_GROUP): [
+    {
+        "resource":"com.pop.sentinel.SentinelService:sayHello()",
+        "grade":1,
+        "count":10,
+        "clusterMode":true,
+        "clusterConfig":{
+            "flowId":1111,
+            "thresholdType":1,
+            "fallbackToLocalWhenFail":true
+        }
+    }
+]
+2019-08-15 23:18:00.071 INFO [DynamicSentinelProperty] Config will be updated to: [FlowRule{resource=com.pop.sentinel.SentinelService:sayHello(), limitApp=default, grade=1, count=10.0, strategy=0, refResource=null, controlBehavior=0, warmUpPeriodSec=10, maxQueueingTimeMs=500, clusterMode=true, clusterConfig=ClusterFlowConfig{flowId=1111, thresholdType=0, fallbackToLocalWhenFail=true, strategy=0, sampleCount=10, windowIntervalMs=1000}, controller=null}]
+2019-08-15 23:18:00.071 INFO [ClusterFlowRuleManager] Registering new property to cluster flow rule manager for namespace <App-Pop>
+2019-08-15 23:18:00.224 INFO [ClusterFlowRuleManager] Cluster flow rules loaded for namespace <App-Pop>: {1111=FlowRule{resource=com.pop.sentinel.SentinelService:sayHello(), limitApp=default, grade=1, count=10.0, strategy=0, refResource=null, controlBehavior=0, warmUpPeriodSec=10, maxQueueingTimeMs=500, clusterMode=true, clusterConfig=ClusterFlowConfig{flowId=1111, thresholdType=0, fallbackToLocalWhenFail=true, strategy=0, sampleCount=10, windowIntervalMs=1000}, controller=null}}
+2019-08-15 23:18:00.225 INFO [ClusterParamFlowRuleManager] Registering new property to cluster param rule manager for namespace <App-Pop>
+2019-08-15 23:18:00.225 INFO [ClusterParamFlowRuleManager] Cluster parameter rules loaded for namespace <App-Pop>: {}
+2019-08-15 23:18:02.122 INFO [NettyTransportServer] Token server started success at port 9999
+```
+
+拿到配置，将会通过json解析，变成我们的配置。
+
+到此，sentinel+nacos的token服务器算是启动了，现在就要需要用考虑如何使用这些令牌了。
+
+例如dubbo要去token server 上面拿令牌。那么dubbo要去sentinel上拿到令牌就需要客户端，所以我们引入jar包。我们这里使用的是`sentinel-provider`模块，当前于引入一个客户端与tokenServer去通信，这和zk的curator一样，同时我们也要为此引入数据源。来拿到配置。
+
+```xml
+ <dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-cluster-client-default</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+
+<dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-datasource-nacos</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+```
+
+接着在这个provider中也同样创建一个可以从tokenServer上获取token的类。
+
+```java
+public class DataSourceInitFunc implements InitFunc {
+
+    //这是nacos的地址
+   private final String remoteAddress="192.168.216.1";//nacos host
+   private final String groupId = "SENTINEL_GROUP";
+   private final String FLOW_POSTFIX="-flow-rules";//dataid
+
+    //令牌服务器的host地址。
+    private final String CLUSTER_SERVER_HOST ="localhost";
+    //令牌服务器的端口号。
+    private final int CLUSTER_SERVER_PORT=9999;
+    //这里需要的是，如果设置短了，就会降级，这是去拿到令牌的等待时间。
+    private final int REQUEST_TIME_OUT = 200000;//请求超时时间。 ms
+
+    private final String APP_NAME = "App-Pop";//name -sapce
+
+    @Override
+    public void init() throws Exception {
+        // 不再是获得集群的信息，而是获得加载的信
+        loadClusterClientConfig();
+        registryClusterFlowRuleProperty();
+    }
+
+    private void loadClusterClientConfig(){
+        //获得集群加载客户端的配置
+        ClusterClientAssignConfig assignConfig
+                 = new ClusterClientAssignConfig();
+        assignConfig.setServerHost(CLUSTER_SERVER_HOST);
+        assignConfig.setServerPort(CLUSTER_SERVER_PORT);
+        ClusterClientConfigManager.applyNewAssignConfig(assignConfig);
+
+        ClusterClientConfig clientConfig = new ClusterClientConfig();
+        clientConfig.setRequestTimeout(REQUEST_TIME_OUT);
+        ClusterClientConfigManager.applyNewConfig(clientConfig);
+    }
+
+    //和token服务端一样，同样需要从nacos上获得集群限流配置
+    //注册nacos的动态数据源
+    private void registryClusterFlowRuleProperty(){
+            //从nacos的数据源获取
+            ReadableDataSource<String, List<FlowRule>>
+                    rds = new NacosDataSource<List<FlowRule>>(
+                    remoteAddress,groupId,APP_NAME+FLOW_POSTFIX,
+                    source -> JSON.parseObject(source, new TypeReference<List<FlowRule>>(){}));
+
+        FlowRuleManager.register2Property(rds.getProperty());
+        //没这一步，限流规则无法应用
+    }
+}
+
+```
+
+然后将这个类，放入spi中加载。
+
+![1565884422620](./img/1565884422620.png)
+
+最后，由于集群环境下，有两种角色，我们需要指定一下角色的类型。这一步表示，这个dubbo是集群客户端。该节点的角色。
+
+```java
+@SpringBootApplication
+public class SentinelProviderApplication {
+
+    public static void main(String[] args) throws IOException {
+//        initFlowRule();//设置限流规则
+        ClusterStateManager.applyState(ClusterStateManager.CLUSTER_CLIENT);
+        SpringApplication.run(SentinelProviderApplication.class, args);
+        System.in.read();
+    }
+
+
+}
+```
+
+然后为了监控，我们配置一下可以监控的jar包。
+
+```xml
+<dependency>
+            <groupId>com.alibaba.csp</groupId>
+            <artifactId>sentinel-transport-simple-http</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+```
+
+同时加入dashboard的监控，我们需要指定额外的jvm参数。
+
+```
+-Dcsp.sentinel.dashboard.server=192.168.0.109:8080 -Dcsp.sentinel.log.use.pid=true
+```
+
+
+![1565884925549](./img/1565884925549.png)
+
+后一句
+
+```
+-Dcsp.sentinel.log.use.pid=true
+```
+
+会让日志的收集按照pid收集，更加准确。
+
+然后我们启动dashborad
+
+![1565885222807](./img/1565885222807.png)
+
+接着在启动我们之前配置好的tokenServer，刷新dashborad
+
+![1565885373680](./img/1565885373680.png)
+
+到此，我们的tokenServer已经启动ok了，然后我们启动sentinel的服务。再次之前再加入额外的参数
+
+![1565885492028](./img/1565885492028.png)
+
+只不过，多了我们之前配置过的App-Pop来指定namesapce，然后启动成功。
+
+![1565885823827](./img/1565885823827.png)
+
+当然为了实现集群限流，我们需要开启两个服务，来测试两个服务是否是同一个限流。
+
+然后限流是成功的。
 

@@ -31,7 +31,7 @@ public class DataSourceInitFunc implements InitFunc {
             ReadableDataSource<String, List<FlowRule>>
                     rds = new NacosDataSource<List<FlowRule>>(
                             remoteAddress,groupId,namespace+FLOW_POSTFIX,
-                    source -> JSON.parseObject(source, new TypeReference<>()));
+                    source -> JSON.parseObject(source, new TypeReference<List<FlowRule>>(){}));
             return rds.getProperty();//得到配置属性
         });
     }

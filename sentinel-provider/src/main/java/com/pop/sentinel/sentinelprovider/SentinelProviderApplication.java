@@ -1,5 +1,6 @@
 package com.pop.sentinel.sentinelprovider;
 
+import com.alibaba.csp.sentinel.cluster.ClusterStateManager;
 import com.alibaba.csp.sentinel.slots.block.RuleConstant;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRule;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRuleManager;
@@ -13,7 +14,8 @@ import java.util.Collections;
 public class SentinelProviderApplication {
 
     public static void main(String[] args) throws IOException {
-        initFlowRule();//设置限流规则
+//        initFlowRule();//设置限流规则
+        ClusterStateManager.applyState(ClusterStateManager.CLUSTER_CLIENT);
         SpringApplication.run(SentinelProviderApplication.class, args);
         System.in.read();
     }
