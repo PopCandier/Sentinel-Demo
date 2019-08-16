@@ -1,1 +1,2 @@
-com.pop.sentinel.sentinelprovider.DataSourceInitFunc
+#com.pop.sentinel.sentinelprovider.DataSourceInitFunc
+com.pop.sentinel.sentinelprovider.NacosDataSourceInitFuncl
